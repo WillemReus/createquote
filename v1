@@ -1,0 +1,152 @@
+// Quote template we will use.
+// A list of available templates can be retrieved by GET /crm/v4/objects/quote_template?properties=hs_name,hs_active
+// See also https://developers.hubspot.com/docs/api/crm/quotes
+const QuoteTemplateID = 157057354080;
+
+//Import required libraries
+const hubspot = require('@hubspot/api-client'); // using HubSpot's SDK for most API calls
+const axios = require('axios'); // using a direct API call for the creation of the quote itself as the SDK currently does not support setting all associations in a single call.
+
+exports.main = async (event, callback) => { 
+    //Create a new HubSpot API Client
+    const hubspotClient = new hubspot.Client({
+		accessToken: process.env.PrivateAppDealActions
+    });
+
+    //Retrieving the included inputfields
+    const hs_object_id = event.inputFields['hs_object_id'];
+    const dealname = event.inputFields['dealname']; 
+    const hubspot_owner_id = event.inputFields['hubspot_owner_id']; 
+    const deal_currency_code = event.inputFields['deal_currency_code']; 
+    const renew_date = event.inputFields['renew_date']; 
+
+    // Helper function to create associations
+    function createAssociations(associatedItems, associationCategory, associationTypeId) {
+      return associatedItems.map(item => ({
+        to: { id: item },
+        types: [
+          {
+            associationCategory,
+            associationTypeId,
+          },
+        ],
+      }));
+    }
+
+    // get lineitem associations of the enrolled deal
+    const AssociatedLineItemsResults = await hubspotClient.crm.deals.associationsApi.getAll(hs_object_id, 'line_items')
+    const AssociatedLineItems = AssociatedLineItemsResults.results.map(({ toObjectId }) => String(toObjectId))  
+    //console.log(JSON.stringify(AssociatedLineItems, null, 2));
+
+    // get contact associations of the enrolled deal
+    const AssociatedContactsResults = await hubspotClient.crm.deals.associationsApi.getAll(hs_object_id, 'contacts')
+    const AssociatedContacts = AssociatedContactsResults.results.map(({ toObjectId }) => String(toObjectId))  
+    //console.log(JSON.stringify(AssociatedContacts, null, 2));
+
+    // get company associations of the enrolled deal
+    const AssociatedCompaniesResults = await hubspotClient.crm.deals.associationsApi.getAll(hs_object_id, 'companies')
+    const AssociatedCompanies = AssociatedCompaniesResults.results.map(({ toObjectId }) => String(toObjectId))  
+    //console.log(JSON.stringify(AssociatedCompanies, null, 2));
+ 
+    // Set associationTypeID's: https://developers.hubspot.com/docs/api/crm/associations#:~:text=Retrieve%20association%20types
+    const QuoteToTemplateAssociationTypeID = 286
+    const QuoteToDealsAssociationTypeID = 64; 
+    const QuoteToLineitemsAssociationTypeID = 67;  
+    const QuoteToContactsAssociationTypeID = 69;   
+    const QuoteToCompaniesAssociationTypeID = 71;  
+  
+    // Create quote template association
+    const templateAssociation = createAssociations([QuoteTemplateID], "HUBSPOT_DEFINED", QuoteToTemplateAssociationTypeID);
+   
+    // Check if there are values in AssociatedLineItems and create associations
+    const dealAssociations = createAssociations([hs_object_id], "HUBSPOT_DEFINED", QuoteToDealsAssociationTypeID);
+  
+    // Check if there are values in AssociatedLineItems and create associations
+    const lineItemAssociations = AssociatedLineItems.length > 0
+    ? createAssociations(AssociatedLineItems, "HUBSPOT_DEFINED", QuoteToLineitemsAssociationTypeID)
+    : [];
+
+  // Check if there are values in AssociatedContacts and create associations
+  const contactAssociations = AssociatedContacts.length > 0
+    ? createAssociations(AssociatedContacts, "HUBSPOT_DEFINED", QuoteToContactsAssociationTypeID)
+    : [];
+
+  // Check if there are values in AssociatedCompanies and create associations
+  const companyAssociations = AssociatedCompanies.length > 0
+    ? createAssociations([AssociatedCompanies[0]], "HUBSPOT_DEFINED", QuoteToCompaniesAssociationTypeID)
+    : [];
+
+  // Combine all associations
+  const associations = [
+    ...templateAssociation,
+    ...dealAssociations,
+    ...lineItemAssociations,
+    ...contactAssociations,
+    ...companyAssociations,
+  ];
+  // console.log(JSON.stringify(associations, null, 2));
+  
+  // Setting properties for the quote
+  const properties = {
+    // Setting minimum properties
+    "hs_title": "testQuote - " + dealname,
+    "hs_expiration_date": renew_date,
+    "hubspot_owner_id": hubspot_owner_id,
+    // Add all properties you believe are helpful, like:
+    "hs_template": null,
+    "hs_template_type": "CUSTOMIZABLE_QUOTE_TEMPLATE",
+    "hs_currency": deal_currency_code,
+    "hs_sender_image_url": null,
+    "hs_sender_company_name": "Reus",
+    "hs_sender_firstname": "Willem",
+    "hs_sender_company_domain": null,
+    "hs_sender_lastname": "Reus",
+    "hs_sender_company_address": null,
+    "hs_sender_email": "wreus@hubspot.com",
+    "hs_sender_company_address2": null,
+    "hs_sender_phone": null,
+    "hs_sender_company_city": null,
+    "hs_sender_jobtitle": null,
+    "hs_sender_company_state": null,
+    "hs_sender_company_zip": null,
+    "hs_sender_company_country": "Ireland",
+    "hs_sender_company_image_url": "https://api-na1.hubapi.com/avatars/v1/signed-uris/1CkIKDQgEEgl3cmV1cy5jb20Y9NTYiAYgZCoaYnJhbmRpbmc6YXBpOndlYjp1cy1lYXN0LTEyDTE3Mi4xNi40NS4yMTASGQB7DcdkhJJNouKsh9cpPJozE-YvoD3Z_LI"  
+  };
+    
+ 
+  try {
+	const quoteID = await axios({
+      method: 'post',
+      url: 'https://api.hubapi.com/crm/v3/objects/quotes',
+      headers: { 'Authorization': `Bearer ${process.env.PrivateAppDealActions}`, 'Content-Type': 'application/json' },
+      data: JSON.stringify({ properties, associations })
+    }).then((response) => {
+      console.log(`Succesfully created quote ${response.data.id}`)
+      return response.data.id
+          }).catch((error) => {
+      console.log(error.response.data)
+      throw new Error(error.response.data.message)
+    })
+    
+   
+    // Patch quote to make this editable. This can only be done after the quote and associations are set, so needs to be a seperate call.  
+	await hubspotClient.crm.quotes.basicApi.update(quoteID, {
+      properties: {
+        "hs_status": "DRAFT"
+      }
+    });
+   
+    
+    // Pass information back as a data output to use as a data input with Copy to Property workflow action.
+    callback({ 
+      outputFields: {
+          quoteID: quoteID
+      }
+    }); // end callback  
+    
+  } catch (e) {
+    e.message === 'HTTP request failed'
+      ? console.error(JSON.stringify(e.response, null, 2))
+      : console.error(e)
+  }
+}
